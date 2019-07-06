@@ -5,28 +5,6 @@ import cmd
 class ZeroException(Exception):
     pass
 
-class Zero(object):
-
-    def __init__(self):
-        pass
-
-    @property
-    def base_lib(self):
-        lib_file = os.environ.get("PYZERO_LIB_PATH", "/usr/lib") + "/"
-        lib_file += os.environ.get("PYZERO_LIB_NAME", "libzero.so")
-
-        return ctypes.cdll.LoadLibrary(lib_file)
-
-    @property
-    def cpointer(self):
-        return self._cpointer
-
-    @cpointer.setter
-    def cpointer(self, cptr):
-        self._cpointer = cptr
-        if cptr == 0:
-            raise ZeroException("Invalid c pointer")
-
 
 def arg_parse(func):
     

@@ -1,5 +1,7 @@
 import ctypes
 import argparse
+import os
+import fcntl
 from ..zero import Zero
 from ..zero import ZeroException
 from ..zero import ZeroCmd
@@ -9,47 +11,96 @@ class I2CException(ZeroException):
     pass
 
 
-def I2CMakeAddr(addr, size):
-    return (addr | size << 30)
+class _CI2CMessage(ctypes.Structure):
+    _fields_ = [
+        ("addr", ctypes.c_ushort),
+        ("flags", ctypes.c_ushort),
+        ("len", ctypes.c_ushort),
+        ("buf", ctypes.POINTER(ctypes.c_ubyte)),
+    ]
+
+class _CI2CIOCTransfer(ctypes.Structure):
+    _fields_ = [
+        ("msgs", ctypes.POINTER(_CI2CMessage)),
+        ("nmsgs", ctypes.c_uint),
+    ]
 
 
-def I2CGetAddrLen(addr):
-    return (addr >> 30)
+class I2C(object):
+    _I2C_RETRIES =  0x0701
+    _I2C_TIMEOUT = 0x0702
+    _I2C_RDWR = 0x0707
 
-
-class I2C(Zero):
-
-    def __init__(self, dev_name):
-        self._dev_name = dev_name
-        self.cpointer = self.base_lib.i2c_open(dev_name)
+    _I2C_M_TEN = 0x0010
+    _I2C_M_RD = 0x0001
     
+    def __init__(self, dev_name):
+        self._fd = os.open(dev_name, os.O_RDWR)
+        fcntl.ioctl(self._fd, I2C._I2C_RETRIES, 2)
+        fcntl.ioctl(self._fd, I2C._I2C_TIMEOUT, 2)
+
     def __del__(self):
-        self.base_lib.i2c_close(self.cpointer)
+        os.close(self._fd)
 
-    def write(self, addr, wr_data):
-        ret = self.base_lib.i2c_write(self.cpointer, addr, (ctypes.c_ubyte * len(wr_data))(*wr_data), len(wr_data))
-        if ret != 0:
-            raise I2CException("write data to 0x{:02x} failed.".format(addr))
+    def write(self, addr, wr_data, dev_ten_addr=False):
+        wr_data = (ctypes.c_ubyte * len(wr_data))(*wr_data)
+        ioc_transfer = _CI2CIOCTransfer()
+        msg = _CI2CMessage()
+        msg.buf = wr_data
+        msg.len = len(wr_data)
+        msg.addr = addr & 0xFF
+        msg.flags = I2C._I2C_M_TEN if dev_ten_addr else 0
+        ioc_transfer.msgs = ctypes.pointer(msg)
+        ioc_transfer.nmsgs = 1
+        fcntl.ioctl(self._fd, I2C._I2C_RDWR, ioc_transfer)
 
-    def read(self, addr, rd_len):
+    def read(self, addr, rd_len, dev_ten_addr=False):
         rd_data = (ctypes.c_ubyte * rd_len)()
-        ret = self.base_lib.i2c_read(self.cpointer, addr, rd_data, rd_len)
-        if ret != 0:
-            raise I2CException("Read data from 0x{:02x} failed.".format(addr))
+        ioc_transfer = _CI2CIOCTransfer()
+        msg = _CI2CMessage()
+        msg.buf = rd_data
+        msg.len = rd_len
+        msg.addr = addr
+        msg.flags = I2C._I2C_M_RD | (I2C._I2C_M_TEN if dev_ten_addr else 0)
+        ioc_transfer.msgs = ctypes.pointer(msg)
+        ioc_transfer.nmsgs = 1
+        fcntl.ioctl(self._fd, I2C._I2C_RDWR, ioc_transfer)
         return list(rd_data)
 
-    def address_write(self, dev_addr, address, wr_data):
-        ret = self.base_lib.i2c_address_write(self.cpointer, dev_addr, I2CMakeAddr(address, 1), (ctypes.c_ubyte * len(wr_data))(*wr_data), len(wr_data))
-        if ret != 0:
-            raise I2CException("address write to 0x{:02x} failed.".format(dev_addr))
+    def client_write(self, dev_addr, address, wr_data, addr_size=1, dev_ten_addr=False):
+        assert addr_size in [1, 2]
+        data = [address & 0xFF] if addr_size == 1 else [(address >> 8) & 0xFF, address & 0xFF]
+        data.extend(wr_data)
+        data = (ctypes.c_ubyte * len(data))(*data)
+        ioc_transfer = _CI2CIOCTransfer()
+        msg = _CI2CMessage()
+        msg.buf = data
+        msg.len = len(data)
+        msg.addr = dev_addr
+        msg.flags = (I2C._I2C_M_TEN if dev_ten_addr else 0)
+        ioc_transfer.msgs = ctypes.pointer(msg)
+        ioc_transfer.nmsgs = 1
+        fcntl.ioctl(self._fd, I2C._I2C_RDWR, ioc_transfer)
+        
+    def client_read(self, dev_addr, address, rd_len, addr_size=1, dev_ten_addr=False):
+        assert addr_size in [1, 2]
 
-    def address_read(self, dev_addr, address, rd_len):
+        ioc_transfer = _CI2CIOCTransfer()
+        msgs = (_CI2CMessage * 2)()
+        data = [address & 0xFF] if addr_size == 1 else [(address >> 8) & 0xFF, address & 0xFF]
+        msgs[0].buf = (ctypes.c_ubyte * len(data))(*data)
+        msgs[0].len = len(data)
+        msgs[0].addr = dev_addr
+        msgs[0].flags = (I2C._I2C_M_TEN if dev_ten_addr else 0)
         rd_data = (ctypes.c_ubyte * rd_len)()
-        ret = self.base_lib.i2c_address_read(self.cpointer, dev_addr, I2CMakeAddr(address, 1), rd_data, rd_len)
-        if ret != 0:
-            raise I2CException("address read from 0x{:02x} failed.".format(dev_addr))
+        msgs[1].buf = rd_data
+        msgs[1].len = rd_len
+        msgs[1].addr = dev_addr
+        msgs[1].flags = I2C._I2C_M_RD | (I2C._I2C_M_TEN if dev_ten_addr else 0)
+        ioc_transfer.msgs = msgs
+        ioc_transfer.nmsgs = 2
+        fcntl.ioctl(self._fd, I2C._I2C_RDWR, ioc_transfer)
         return list(rd_data)
-
 
 class I2CCmd(ZeroCmd):
     intro = 'Welcome to I2C shell. Type help or ? to list the command'
@@ -66,14 +117,14 @@ class I2CCmd(ZeroCmd):
         return self.i2c.read(addr, rd_len)
 
     @arg_parse
-    def do_address_write(self, dev_addr, address, addr_len, wr_data):
-        '''address_write <dev_addr> <address> <addr_len> <data_list>'''
-        self.i2c.address_write(dev_addr, I2CMakeAddr(address, addr_len), wr_data)
+    def do_client_write(self, dev_addr, address, wr_data):
+        '''client_write <dev_addr> <address> <data_list>'''
+        self.i2c.client_write(dev_addr, address, wr_data)
 
     @arg_parse
-    def do_address_read(self, dev_addr, address, addr_len, rd_len):
-        '''address_read <dev_addr> <address> <addr_len> <rd_len>'''
-        return self.i2c.address_read(dev_addr, I2CMakeAddr(address, addr_len), rd_len)
+    def do_client_read(self, dev_addr, address, rd_len):
+        '''client_read <dev_addr> <address> <rd_len>'''
+        return self.i2c.client_read(dev_addr, address, rd_len)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
