@@ -1,3 +1,4 @@
+
 import ctypes
 import argparse
 import os
@@ -25,7 +26,6 @@ class _CI2CIOCTransfer(ctypes.Structure):
         ("nmsgs", ctypes.c_uint),
     ]
 
-
 class I2C(object):
     _I2C_RETRIES =  0x0701
     _I2C_TIMEOUT = 0x0702
@@ -42,25 +42,25 @@ class I2C(object):
     def __del__(self):
         os.close(self._fd)
 
-    def write(self, addr, wr_data, dev_ten_addr=False):
+    def write(self, dev_addr, wr_data, dev_ten_addr=False):
         wr_data = (ctypes.c_ubyte * len(wr_data))(*wr_data)
         ioc_transfer = _CI2CIOCTransfer()
         msg = _CI2CMessage()
         msg.buf = wr_data
         msg.len = len(wr_data)
-        msg.addr = addr & 0xFF
+        msg.addr = dev_addr & 0xFF
         msg.flags = I2C._I2C_M_TEN if dev_ten_addr else 0
         ioc_transfer.msgs = ctypes.pointer(msg)
         ioc_transfer.nmsgs = 1
         fcntl.ioctl(self._fd, I2C._I2C_RDWR, ioc_transfer)
 
-    def read(self, addr, rd_len, dev_ten_addr=False):
+    def read(self, dev_addr, rd_len, dev_ten_addr=False):
         rd_data = (ctypes.c_ubyte * rd_len)()
         ioc_transfer = _CI2CIOCTransfer()
         msg = _CI2CMessage()
         msg.buf = rd_data
         msg.len = rd_len
-        msg.addr = addr
+        msg.addr = dev_addr
         msg.flags = I2C._I2C_M_RD | (I2C._I2C_M_TEN if dev_ten_addr else 0)
         ioc_transfer.msgs = ctypes.pointer(msg)
         ioc_transfer.nmsgs = 1
