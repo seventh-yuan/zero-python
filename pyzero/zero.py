@@ -1,10 +1,10 @@
 import os
 import ctypes
 import cmd
+import time
 
 class ZeroException(Exception):
     pass
-
 
 def arg_parse(func):
     
